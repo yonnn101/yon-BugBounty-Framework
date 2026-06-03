@@ -92,8 +92,7 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    profiles:
-      - worker
+    # No Compose profile: recon tasks need a consumer. Omit worker only via overrides if you must.
 
 volumes:
   pgdata:

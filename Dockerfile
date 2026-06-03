@@ -10,7 +10,28 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ca-certificates \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Subfinder (ProjectDiscovery) — required by workers.tasks.discovery; not on PATH in slim images.
+# Bump SUBFINDER_VERSION when you want a newer release: https://github.com/projectdiscovery/subfinder/releases
+ARG SUBFINDER_VERSION=2.6.7
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      x86_64) sf_arch=amd64 ;; \
+      aarch64) sf_arch=arm64 ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/subfinder.zip \
+      "https://github.com/projectdiscovery/subfinder/releases/download/v${SUBFINDER_VERSION}/subfinder_${SUBFINDER_VERSION}_linux_${sf_arch}.zip"; \
+    unzip -o /tmp/subfinder.zip -d /tmp/subfinder-extract; \
+    bin="$(find /tmp/subfinder-extract -type f -name subfinder | head -1)"; \
+    test -n "$bin" -a -f "$bin"; \
+    install -m 755 "$bin" /usr/local/bin/subfinder; \
+    rm -rf /tmp/subfinder.zip /tmp/subfinder-extract; \
+    subfinder -version
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt

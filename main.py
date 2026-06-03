@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from loguru import logger
 
 from api.error_handlers import request_validation_exception_handler
-from api.routes import admin, assets, auth, programs
+from api.routes import admin, assets, auth, programs, scans, tasks
 from core.auth_settings import bootstrap_superuser_enabled, get_auth_settings
 from core.database import AsyncSessionLocal
 from services.auth_service import ensure_bootstrap_superuser
@@ -54,7 +54,8 @@ app.add_exception_handler(RequestValidationError, request_validation_exception_h
 
 _cors = os.environ.get(
     "CORS_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173",
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:8080,http://127.0.0.1:8080",
 )
 _cors_origins = [o.strip() for o in _cors.split(",") if o.strip()]
 app.add_middleware(
@@ -65,10 +66,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
-app.include_router(admin.router)
-app.include_router(programs.router)
-app.include_router(assets.router)
+# All JSON API routes under /api so the SPA can own /programs, /dashboard, etc. on the same host.
+_API_PREFIX = "/api"
+app.include_router(auth.router, prefix=_API_PREFIX)
+app.include_router(admin.router, prefix=_API_PREFIX)
+app.include_router(programs.router, prefix=_API_PREFIX)
+app.include_router(assets.router, prefix=_API_PREFIX)
+app.include_router(scans.router, prefix=_API_PREFIX)
+app.include_router(tasks.router, prefix=_API_PREFIX)
 
 
 @app.get("/health")
