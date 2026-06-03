@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_active_user, get_db
 from models.user import User
-from schemas.program import ProgramCreate, ProgramRead, ProgramUpdate
+from schemas.program import (
+    ProgramCreate,
+    ProgramRead,
+    ProgramReadWithStats,
+    ProgramSummaryStats,
+    ProgramUpdate,
+)
 from services import program_service
 
 router = APIRouter(prefix="/programs", tags=["programs"])
@@ -34,13 +40,25 @@ async def create_program(
     return ProgramRead.model_validate(program)
 
 
-@router.get("", response_model=list[ProgramRead])
+@router.get("", response_model=list[ProgramReadWithStats])
 async def list_programs(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> list[ProgramRead]:
-    programs = await program_service.list_programs(db, current_user.id)
-    return [ProgramRead.model_validate(p) for p in programs]
+) -> list[ProgramReadWithStats]:
+    rows = await program_service.list_programs_with_asset_stats(db, current_user.id)
+    out: list[ProgramReadWithStats] = []
+    for prog, total, by_type in rows:
+        base = ProgramRead.model_validate(prog).model_dump()
+        out.append(
+            ProgramReadWithStats(
+                **base,
+                summary=ProgramSummaryStats(
+                    total_assets=total,
+                    assets_by_type=dict(by_type),
+                ),
+            ),
+        )
+    return out
 
 
 @router.get("/{program_id}", response_model=ProgramRead)

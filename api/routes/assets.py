@@ -8,30 +8,28 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_active_user, get_db
-from models.asset import Asset
-from models.enums import AssetType
 from models.user import User
 from schemas.asset_actions import AssetIngestRequest
 from schemas.discovery import SubdomainDiscoveryRequest, SubdomainDiscoveryResponse
-from schemas.graph import GraphEdge, GraphNode, GraphView
+from schemas.graph import GraphTreeNode, HierarchicalGraphView
 from services import asset_service, program_service
 
 router = APIRouter(tags=["assets"])
 
 
-@router.get("/programs/{program_id}/graph", response_model=GraphView)
+@router.get("/programs/{program_id}/graph", response_model=HierarchicalGraphView)
 async def get_program_graph(
     program_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-) -> GraphView:
+) -> HierarchicalGraphView:
     program = await program_service.get_program_for_owner(db, program_id, current_user.id)
     if program is None:
         raise HTTPException(status_code=404, detail="Program not found")
-    assets, edges = await asset_service.get_program_graph(db, program_id)
-    nodes = [GraphNode.model_validate(a) for a in assets]
-    edge_dtos = [GraphEdge.model_validate(e) for e in edges]
-    return GraphView(program_id=program_id, nodes=nodes, edges=edge_dtos)
+    roots_raw, orphans_raw = await asset_service.build_hierarchical_graph(db, program_id)
+    roots = [GraphTreeNode.model_validate(n) for n in roots_raw]
+    orphans = [GraphTreeNode.model_validate(n) for n in orphans_raw]
+    return HierarchicalGraphView(program_id=program_id, roots=roots, orphans=orphans)
 
 
 @router.post(
@@ -83,19 +81,17 @@ async def start_subdomain_discovery(
     if program is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Program not found")
 
-    root = await db.get(Asset, body.root_domain_asset_id)
-    if root is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Root domain asset not found")
-    if root.program_id != program_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Root asset does not belong to this program",
+    try:
+        root = await asset_service.ensure_domain_asset_for_program(
+            db,
+            program_id,
+            body.root_domain_asset_id,
         )
-    if root.type != AssetType.DOMAIN.value:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Root asset must have type DOMAIN",
-        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "Root domain asset not found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
 
     domain = (body.domain or root.value or "").strip()
     if not domain:
