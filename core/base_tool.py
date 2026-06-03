@@ -12,9 +12,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from loguru import logger
+
+from models.enums import ToolDatumKind
 
 # Project root: .../recon_methdology
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -39,9 +41,15 @@ class AsyncBaseTool(ABC):
     Subclasses set :attr:`tool_name`, pass ``binary_path`` to ``__init__``, and
     implement :meth:`parse_output`. Override ``output_directory`` or ``timeout_seconds``
     on the instance if needed.
+
+    Workflow integration: declare :attr:`INPUT_TYPES` / :attr:`OUTPUT_TYPES` as the
+    primary datum kinds this tool consumes and produces when used in a chain (see
+    ``services.workflow_service``). Empty sets mean "unspecified / stub".
     """
 
     tool_name: str = "async_base_tool"
+    INPUT_TYPES: ClassVar[frozenset[ToolDatumKind]] = frozenset()
+    OUTPUT_TYPES: ClassVar[frozenset[ToolDatumKind]] = frozenset()
 
     def __init__(
         self,
