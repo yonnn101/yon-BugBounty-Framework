@@ -3,11 +3,12 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+# DevDependencies (@types/node, typescript, vite, …) required for `tsc` + `vite build`.
 RUN npm ci
 
 COPY . .
-# Empty = browser uses same origin; nginx proxies /auth, /programs, etc. to the API.
-ENV VITE_API_BASE_URL=
+# Same-origin API under /api (see main.py + nginx.conf); SPA keeps /programs for React Router.
+ENV VITE_API_BASE_URL=/api
 RUN npm run build
 
 FROM nginx:1.27-alpine

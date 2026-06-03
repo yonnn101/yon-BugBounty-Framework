@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 
 class DatabaseSettings(BaseSettings):
@@ -40,11 +41,14 @@ class DatabaseSettings(BaseSettings):
 
 _settings = DatabaseSettings()
 
+# NullPool: Celery workers call asyncio.run() multiple times per task (e.g. sync_mark_job_status
+# then run_with_session). Pooled asyncpg connections stay bound to the first loop and raise
+# "Future attached to a different loop" on the next run. NullPool opens/closes a connection per
+# session scope on the *current* loop (fine for API + moderate worker concurrency).
 engine: AsyncEngine = create_async_engine(
     _settings.database_url,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
+    poolclass=NullPool,
     echo=False,
 )
 
