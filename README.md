@@ -12,20 +12,14 @@ From the repo root:
 docker compose up --build -d
 ```
 
-- **Web UI:** http://localhost:8080 — React app (nginx proxies `/auth`, `/programs`, `/admin`, `/health` to the API, so use this URL in the browser for same-origin API calls).  
-- **API (direct):** http://localhost:8000 — OpenAPI docs at http://localhost:8000/docs  
+- **Web UI:** http://localhost:8080 — React app; JSON API is under **`/api/*`** (nginx proxies that to the API) so **`/programs`** in the browser stays the SPA (reload-safe).  
+- **API (direct):** http://localhost:8000 — e.g. `GET http://localhost:8000/api/programs` (auth required); OpenAPI at http://localhost:8000/docs  
 - **Postgres:** `localhost:15432` → container `5432` (high host port avoids common Windows reserved ranges near 5432)  
   - If Docker still reports **bind / access permissions** on `15432`, run **Admin PowerShell:** `netsh interface ipv4 show excludedportrange protocol=tcp` and change the host side in `docker-compose.yml` (e.g. `30432:5432`) to a port **outside** those ranges; update `.env` / `DATABASE_URL` to match.  
 - **Redis:** `localhost:6379`  
 - **MinIO API:** `localhost:9000` — console: http://localhost:9001  
 
-On first start the API container runs `alembic upgrade head`, then starts Uvicorn.
-
-**Celery worker** (optional profile):
-
-```bash
-docker compose --profile worker up --build -d
-```
+On first start the API container runs `alembic upgrade head`, then starts Uvicorn. The **`worker`** service (Celery, queues `fast` + `slow`) starts with the same `docker compose up` so background jobs do not sit **PENDING** forever.
 
 **Rebuild after code changes:**
 
@@ -50,7 +44,7 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173**. Vite **proxies** `/auth`, `/programs`, `/admin`, and `/health` to **http://127.0.0.1:8000**.
+Open **http://localhost:5173**. Vite **proxies** `/api` (and `/health`, `/docs`, OpenAPI) to **http://127.0.0.1:8000**; the client defaults to **`/api`** for fetch URLs.
 
 - **Custom API URL (static build / CDN):** set `VITE_API_BASE_URL` in `frontend/.env` and configure **`CORS_ORIGINS`** on the API.
 
@@ -87,12 +81,12 @@ npm run build   # or: docker compose build frontend
 
 ## Authentication (JWT)
 
-1. **Register:** `POST /auth/register` with JSON `{ "email", "password", "full_name?" }`.
-2. **Token:** `POST /auth/token` (OAuth2 form) — `username` = email, `password` = password. Returns `access_token` in JSON (Postman, scripts, OpenAPI).
+1. **Register:** `POST /api/auth/register` with JSON `{ "email", "password", "full_name?" }`.
+2. **Token:** `POST /api/auth/token` (OAuth2 form) — `username` = email, `password` = password. Returns `access_token` in JSON (Postman, scripts, OpenAPI).
 3. **Cookie (browser UI):** the same response also sets an **httpOnly** cookie (name from **`ACCESS_TOKEN_COOKIE_NAME`**, default `access_token`) with lifetime aligned to **`ACCESS_TOKEN_EXPIRE_MINUTES`**. The React app uses **`credentials: 'include'`** and does **not** store the JWT in `localStorage`.
 4. **Use API:** send **`Authorization: Bearer <access_token>`** *or* send the auth cookie — protected routes accept either (Bearer wins if both are present).
-5. **Logout (cookie clients):** `POST /auth/logout` clears the cookie.
-6. **Profile:** `GET /auth/me` with Bearer or cookie.
+5. **Logout (cookie clients):** `POST /api/auth/logout` clears the cookie.
+6. **Profile:** `GET /api/auth/me` with Bearer or cookie.
 
 Set **`JWT_SECRET_KEY`** in production (see `.env.example`). Use **`COOKIE_SECURE=true`** when the API is only served over HTTPS so browsers send the cookie on TLS only.
 
@@ -103,18 +97,18 @@ Optional env vars (see `.env.example`):
 - **`SUPERUSER_EMAIL`** — on API startup, if set together with a password, this account is **created** (if missing) or **promoted** to `is_superuser=true`.
 - **`SUPERUSER_PASSWORD`** — must be at least **8 characters** (same minimum as registration).
 
-Use `GET /auth/me` to confirm `is_superuser`. Superuser-only routes live under **`/admin/*`** (e.g. `GET /admin/ping` with Bearer token).
+Use `GET /api/auth/me` to confirm `is_superuser`. Superuser-only routes live under **`/api/admin/*`** (e.g. `GET /api/admin/ping` with Bearer token).
 
-Public without auth: `/health`, `/auth/register`, `/auth/token`, `/docs`, `/openapi.json`. (`/auth/logout` is safe unauthenticated — it only clears the cookie.)
+Public without auth: `/health`, `/api/auth/register`, `/api/auth/token`, `/docs`, `/openapi.json`. (`/api/auth/logout` is safe unauthenticated — it only clears the cookie.)
 
 ## API highlights
 
 - **Programs and assets are per-user:** each program has an `owner_id`. Listing, read, update, delete, graph, and asset ingest require a JWT for that owner. Another account receives **404** for the same `program_id`.
 - **422 validation errors** redact common secret fields (`password`, `access_token`, etc.) so failed requests don’t echo credentials. Do not put real secrets in `settings` / scope JSON — those fields are returned on program reads as you stored them.
-- `POST /programs` — create program (scope container) **(auth)**; you become the owner.
-- `GET /programs/{id}/graph` — nodes (assets) and edges (relations) **(auth, owner only)**.
-- `POST /programs/{id}/assets` — get-or-create asset + optional parent relation **(auth, owner only)**.
-- `GET /admin/ping` — sanity check for superuser JWT **(superuser only)**.
+- `POST /api/programs` — create program (scope container) **(auth)**; you become the owner.
+- `GET /api/programs/{id}/graph` — nodes (assets) and edges (relations) **(auth, owner only)**.
+- `POST /api/programs/{id}/assets` — get-or-create asset + optional parent relation **(auth, owner only)**.
+- `GET /api/admin/ping` — sanity check for superuser JWT **(superuser only)**.
 
 ## Execution layer (`AsyncBaseTool`)
 
