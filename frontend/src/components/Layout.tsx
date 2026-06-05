@@ -33,7 +33,7 @@ export function Layout() {
             {user?.is_superuser && (
               <button
                 type="button"
-                title="Call GET /admin/ping"
+                title="Call GET /api/admin/ping"
                 onClick={async () => {
                   setAdminMsg(null);
                   try {
