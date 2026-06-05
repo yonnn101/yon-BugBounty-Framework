@@ -1,5 +1,8 @@
+import { flattenHierarchicalGraph } from "../utils/graphTree";
 import type {
+  CeleryTaskStatus,
   GraphView,
+  HierarchicalGraphView,
   IngestAssetResponse,
   Program,
   SubdomainDiscoveryResponse,
@@ -7,7 +10,17 @@ import type {
   User,
 } from "./types";
 
-const base = () => import.meta.env.VITE_API_BASE_URL ?? "";
+/**
+ * API base path. Default `/api` matches FastAPI (see main.py) and nginx/Vite proxies.
+ * Set `VITE_API_BASE_URL` to a full origin (e.g. https://api.example.com) for split hosting.
+ */
+const base = () => {
+  const raw = import.meta.env.VITE_API_BASE_URL;
+  if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
+    return String(raw).replace(/\/$/, "");
+  }
+  return "/api";
+};
 
 /** Send cookies (httpOnly JWT) on same-origin or credentialed cross-origin requests. */
 const cred: RequestInit = { credentials: "include" };
@@ -131,7 +144,9 @@ export async function deleteProgram(id: string): Promise<void> {
 export async function getGraph(programId: string): Promise<GraphView> {
   const res = await fetch(`${base()}/programs/${programId}/graph`, { ...cred });
   if (!res.ok) throw new Error(await parseError(res));
-  return res.json() as Promise<GraphView>;
+  const raw = (await res.json()) as HierarchicalGraphView;
+  const { nodes, edges } = flattenHierarchicalGraph(raw);
+  return { program_id: raw.program_id, nodes, edges };
 }
 
 export async function ingestAsset(
@@ -177,4 +192,10 @@ export async function startSubdomainDiscovery(
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json() as Promise<SubdomainDiscoveryResponse>;
+}
+
+export async function getCeleryTaskStatus(taskId: string): Promise<CeleryTaskStatus> {
+  const res = await fetch(`${base()}/tasks/${encodeURIComponent(taskId)}`, { ...cred });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json() as Promise<CeleryTaskStatus>;
 }
