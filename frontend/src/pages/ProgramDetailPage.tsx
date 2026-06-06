@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { SubdomainDiscoveryPanel } from "../components/SubdomainDiscoveryPanel";
 import * as api from "../api/client";
 import type { GraphView, Program } from "../api/types";
 
@@ -25,16 +26,6 @@ export function ProgramDetailPage() {
   const [ingesting, setIngesting] = useState(false);
   const [ingestMsg, setIngestMsg] = useState<string | null>(null);
 
-  const [discoveryRootId, setDiscoveryRootId] = useState("");
-  const [discoveryDomain, setDiscoveryDomain] = useState("");
-  const [discoveryBusy, setDiscoveryBusy] = useState(false);
-  const [discoveryMsg, setDiscoveryMsg] = useState<string | null>(null);
-
-  const domainNodes = useMemo(
-    () => graph?.nodes.filter((n) => n.type === "DOMAIN") ?? [],
-    [graph],
-  );
-
   const loadAll = useCallback(async () => {
     if (!id) return;
     setErr(null);
@@ -57,22 +48,6 @@ export function ProgramDetailPage() {
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
-
-  useEffect(() => {
-    if (!graph?.nodes.length) return;
-    const domains = graph.nodes.filter((n) => n.type === "DOMAIN");
-    if (domains.length === 0) {
-      setDiscoveryRootId("");
-      setDiscoveryDomain("");
-      return;
-    }
-    setDiscoveryRootId((prev) => {
-      if (prev && domains.some((d) => d.id === prev)) return prev;
-      const first = domains[0];
-      setDiscoveryDomain(first.value);
-      return first.id;
-    });
-  }, [graph]);
 
   const nodeLabel = useMemo(() => {
     const m = new Map<string, string>();
@@ -103,30 +78,6 @@ export function ProgramDetailPage() {
       navigate("/programs");
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : "Delete failed");
-    }
-  }
-
-  function onDiscoveryRootChange(assetId: string) {
-    setDiscoveryRootId(assetId);
-    const n = graph?.nodes.find((x) => x.id === assetId);
-    setDiscoveryDomain(n?.value ?? "");
-  }
-
-  async function onStartDiscovery(e: FormEvent) {
-    e.preventDefault();
-    if (!id || !discoveryRootId) return;
-    setDiscoveryBusy(true);
-    setDiscoveryMsg(null);
-    try {
-      const res = await api.startSubdomainDiscovery(id, {
-        root_domain_asset_id: discoveryRootId,
-        domain: discoveryDomain.trim() || undefined,
-      });
-      setDiscoveryMsg(`Queued — Celery task id: ${res.task_id}`);
-    } catch (ex) {
-      setDiscoveryMsg(ex instanceof Error ? ex.message : "Discovery failed");
-    } finally {
-      setDiscoveryBusy(false);
     }
   }
 
@@ -301,55 +252,7 @@ export function ProgramDetailPage() {
         {ingestMsg && <p className="mt-3 text-sm text-slate-400">{ingestMsg}</p>}
       </section>
 
-      <section className="rounded-xl border border-cyan-900/40 bg-surface-800/50 p-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Subdomain discovery (Subfinder)
-        </h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Queues a background worker task: passive subdomain enumeration, then batched DNS resolution.
-          Requires a <span className="text-slate-400">DOMAIN</span> asset and a running Celery worker.
-        </p>
-        <form onSubmit={onStartDiscovery} className="mt-4 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
-          <div className="min-w-[200px] flex-1">
-            <label className="text-xs text-slate-500">Root DOMAIN asset</label>
-            <select
-              required
-              value={discoveryRootId}
-              onChange={(e) => onDiscoveryRootChange(e.target.value)}
-              disabled={domainNodes.length === 0}
-              className="mt-1 w-full rounded-lg border border-surface-600 bg-surface-900 px-3 py-2 text-sm text-white disabled:opacity-50"
-            >
-              {domainNodes.length === 0 ? (
-                <option value="">— add a DOMAIN asset above —</option>
-              ) : (
-                domainNodes.map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.value}
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
-          <div className="min-w-[200px] flex-1">
-            <label className="text-xs text-slate-500">Domain for subfinder (-d)</label>
-            <input
-              value={discoveryDomain}
-              onChange={(e) => setDiscoveryDomain(e.target.value)}
-              placeholder="example.com"
-              className="mt-1 w-full rounded-lg border border-surface-600 bg-surface-900 px-3 py-2 text-white focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-            <p className="mt-1 text-[10px] text-slate-600">Leave empty to use the root DOMAIN value.</p>
-          </div>
-          <button
-            type="submit"
-            disabled={discoveryBusy || domainNodes.length === 0 || !discoveryRootId}
-            className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500 disabled:opacity-50"
-          >
-            {discoveryBusy ? "Queueing…" : "Run discovery"}
-          </button>
-        </form>
-        {discoveryMsg && <p className="mt-3 text-sm text-slate-400">{discoveryMsg}</p>}
-      </section>
+      {id && <SubdomainDiscoveryPanel programId={id} graph={graph} onGraphRefresh={loadAll} />}
 
       <section className="space-y-4">
         <div className="flex items-center justify-between">
