@@ -72,6 +72,11 @@ export function DashboardPage() {
                   </Link>
                   <p className="text-xs text-slate-500">
                     {p.platform} · {new Date(p.created_at).toLocaleDateString()}
+                    {p.summary != null && (
+                      <span className="ml-2 text-slate-600">
+                        · {p.summary.total_assets} asset{p.summary.total_assets === 1 ? "" : "s"}
+                      </span>
+                    )}
                   </p>
                 </div>
                 <Link to={`/programs/${p.id}`} className="text-sm text-accent hover:underline">
