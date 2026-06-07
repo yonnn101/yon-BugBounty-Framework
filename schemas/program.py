@@ -43,3 +43,16 @@ class ProgramRead(ProgramBase):
     owner_id: uuid.UUID
     created_at: datetime
     updated_at: datetime
+
+
+class ProgramSummaryStats(BaseModel):
+    """Aggregate counts for dashboard / program list."""
+
+    total_assets: int = 0
+    assets_by_type: dict[str, int] = Field(default_factory=dict)
+
+
+class ProgramReadWithStats(ProgramRead):
+    """Program row including asset inventory summary."""
+
+    summary: ProgramSummaryStats
