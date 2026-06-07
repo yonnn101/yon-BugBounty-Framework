@@ -57,9 +57,11 @@ celery_app.conf.update(
         "yonnn.debug.ping": {"queue": "fast", "routing_key": "fast"},
         "yonnn.discovery.process_subdomain_discovery": {"queue": "slow", "routing_key": "slow"},
         "yonnn.discovery.resolve_dns_batch": {"queue": "fast", "routing_key": "fast"},
+        "yonnn.workflow.http_probe_stub": {"queue": "slow", "routing_key": "slow"},
+        "yonnn.workflow.tool_stub": {"queue": "slow", "routing_key": "slow"},
     },
     # Ensures worker/call clients load the same task modules as ``import workers.tasks``.
-    include=("workers.tasks.debug", "workers.tasks.discovery"),
+    include=("workers.tasks.debug", "workers.tasks.discovery", "workers.tasks.workflow_runner"),
 )
 
 # Register tasks after Task base is bound (package __init__ imports all task modules).
