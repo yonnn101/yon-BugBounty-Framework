@@ -49,3 +49,17 @@ class ProgramPlatform(StrEnum):
 
     H1 = "H1"
     BC = "BC"
+
+
+class ToolDatumKind(StrEnum):
+    """Primary semantic payload passed between chained tools (workflow compatibility).
+
+    Distinct from :class:`AssetType` when the step moves *batches* or graph-derived context
+    rather than a single asset row.
+    """
+
+    DOMAIN = "DOMAIN"
+    SUBDOMAIN = "SUBDOMAIN"
+    IP = "IP"
+    HOST_OR_IP = "HOST_OR_IP"
+    ARBITRARY = "ARBITRARY"

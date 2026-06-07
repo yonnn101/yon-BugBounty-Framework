@@ -6,7 +6,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import BaseModel
@@ -30,5 +31,14 @@ class Job(BaseModel):
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     raw_output_link: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    celery_task_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    workflow_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+    workflow_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    workflow_step_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scan_options: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     target_asset: Mapped[Asset | None] = relationship("Asset", foreign_keys=[target_asset_id])
