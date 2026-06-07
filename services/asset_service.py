@@ -344,3 +344,116 @@ async def get_program_graph(
     except Exception:
         logger.exception("get_program_graph failed program_id={}", program_id)
         raise
+
+
+async def ensure_domain_asset_for_program(
+    session: AsyncSession,
+    program_id: uuid.UUID,
+    root_asset_id: uuid.UUID,
+) -> Asset:
+    """Validate root DOMAIN asset for subdomain discovery (raises ``ValueError``)."""
+    root = await session.get(Asset, root_asset_id)
+    if root is None:
+        msg = "Root domain asset not found"
+        raise ValueError(msg)
+    if root.program_id != program_id:
+        msg = "Root asset does not belong to this program"
+        raise ValueError(msg)
+    if root.type != AssetType.DOMAIN.value:
+        msg = f"Root asset must be DOMAIN, got {root.type!r}"
+        raise ValueError(msg)
+    return root
+
+
+# (parent_type, relation_type) -> sort tier (spec §3: DOMAIN→SUBDOMAIN→IP→PORT→SERVICE)
+_REL_CHILD_ORDER: dict[tuple[str, str], int] = {
+    (AssetType.DOMAIN.value, RelationType.CONTAINS.value): 10,
+    (AssetType.DOMAIN.value, RelationType.RESOLVES_TO.value): 20,
+    (AssetType.SUBDOMAIN.value, RelationType.CONTAINS.value): 10,
+    (AssetType.SUBDOMAIN.value, RelationType.RESOLVES_TO.value): 20,
+    (AssetType.IP.value, RelationType.HOSTS.value): 10,
+    (AssetType.URL.value, RelationType.HOSTS.value): 15,
+    (AssetType.PORT.value, RelationType.RUNS_ON.value): 10,
+}
+
+
+def _tree_node_payload(asset: Asset, children: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "id": asset.id,
+        "type": asset.type,
+        "value": asset.value,
+        "metadata": dict(asset.metadata_ or {}),
+        "first_seen": asset.first_seen,
+        "last_seen": asset.last_seen,
+        "children": children,
+    }
+
+
+async def build_hierarchical_graph(
+    session: AsyncSession,
+    program_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Discovery tree: root DOMAINs → SUBDOMAIN (contains) → IP (resolves_to) → PORT (hosts) → SERVICE (runs_on).
+
+    Assets not reachable from any root DOMAIN are returned as **orphans** (flat nodes, empty children).
+    """
+    assets, edges = await get_program_graph(session, program_id)
+    if not assets:
+        return [], []
+
+    by_id: dict[uuid.UUID, Asset] = {a.id: a for a in assets}
+    adj: dict[uuid.UUID, list[tuple[str, uuid.UUID]]] = {}
+    for e in edges:
+        adj.setdefault(e.parent_id, []).append((e.relation_type, e.child_id))
+
+    contained_children = {
+        e.child_id for e in edges if e.relation_type == RelationType.CONTAINS.value
+    }
+    root_domains = sorted(
+        (a for a in assets if a.type == AssetType.DOMAIN.value and a.id not in contained_children),
+        key=lambda x: x.value.lower(),
+    )
+
+    visited: set[uuid.UUID] = set()
+
+    def sort_outgoing(parent: Asset, pairs: list[tuple[str, uuid.UUID]]) -> list[tuple[str, uuid.UUID]]:
+        def key(t: tuple[str, uuid.UUID]) -> tuple[int, str, str]:
+            rel, cid = t
+            ch = by_id.get(cid)
+            if ch is None:
+                return (999, "", "")
+            tier = _REL_CHILD_ORDER.get((parent.type, rel), 50)
+            return (tier, ch.type, ch.value.lower())
+
+        return sorted(pairs, key=key)
+
+    def build_subtree(aid: uuid.UUID) -> dict[str, Any] | None:
+        asset = by_id.get(aid)
+        if asset is None:
+            return None
+        visited.add(aid)
+        raw = adj.get(aid, [])
+        outgoing = sort_outgoing(asset, raw)
+        child_payloads: list[dict[str, Any]] = []
+        for _rel, cid in outgoing:
+            if cid not in by_id:
+                continue
+            sub = build_subtree(cid)
+            if sub is not None:
+                child_payloads.append(sub)
+        return _tree_node_payload(asset, child_payloads)
+
+    roots_out: list[dict[str, Any]] = []
+    for rd in root_domains:
+        if rd.id in visited:
+            continue
+        node = build_subtree(rd.id)
+        if node is not None:
+            roots_out.append(node)
+
+    orphans_assets = sorted(
+        (a for a in assets if a.id not in visited),
+        key=lambda x: (x.type, x.value.lower()),
+    )
+    orphans_out = [_tree_node_payload(a, []) for a in orphans_assets]
+    return roots_out, orphans_out
