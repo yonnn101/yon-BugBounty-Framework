@@ -17,8 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.base_tool import AsyncBaseTool
 from models.asset import Asset
-from models.enums import AssetType, RelationType
+from models.enums import AssetType, JobStatus, RelationType, ToolDatumKind
 from services.asset_service import add_discovered_asset, link_assets, upsert_asset
+from services.job_service import sync_mark_job_status
 from workers.base_task import AsyncBaseTask
 from workers.celery_app import celery_app
 
@@ -30,6 +31,8 @@ class SubfinderTask(AsyncBaseTool):
     """Runs ``subfinder -d <domain> -json`` and parses host rows."""
 
     tool_name = "subfinder"
+    INPUT_TYPES = frozenset({ToolDatumKind.DOMAIN})
+    OUTPUT_TYPES = frozenset({ToolDatumKind.SUBDOMAIN})
 
     def __init__(self, binary_path: str | Path | None = None, **kwargs: Any) -> None:
         super().__init__(binary_path or SUBFINDER_BINARY, **kwargs)
@@ -104,7 +107,16 @@ async def _resolve_host_ips(hostname: str) -> list[str]:
     name="yonnn.discovery.resolve_dns_batch",
     queue="fast",
 )
-def resolve_dns_batch(self, payload: dict[str, Any]) -> dict[str, Any]:
+def resolve_dns_batch(
+    self,
+    payload: dict[str, Any],
+    job_id: str | None = None,
+    workflow_name: str | None = None,
+    workflow_instance_id: str | None = None,
+    workflow_step_index: int = 1,
+    scan_options: dict[str, Any] | None = None,
+    root_target_asset_id: str | None = None,
+) -> dict[str, Any]:
     """Resolve saved SUBDOMAIN assets to IP assets in batches (no per-host Celery tasks)."""
 
     async def work(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
@@ -177,7 +189,26 @@ def resolve_dns_batch(self, payload: dict[str, Any]) -> dict[str, Any]:
             "subdomains_processed": subdomains_processed,
         }
 
-    return self.run_with_session(work, payload)
+    out = self.run_with_session(work, payload)
+    if job_id:
+        try:
+            jid = uuid.UUID(job_id)
+            sync_mark_job_status(jid, JobStatus.COMPLETED.value)
+        except Exception:
+            logger.exception("resolve_dns_batch: could not mark job completed")
+    if workflow_name and workflow_instance_id and root_target_asset_id:
+        from services.workflow_service import trigger_next_step
+
+        trigger_next_step(
+            out,
+            workflow_name,
+            workflow_step_index,
+            job_id=job_id,
+            workflow_instance_id=workflow_instance_id,
+            scan_options=scan_options,
+            root_target_asset_id=root_target_asset_id,
+        )
+    return out
 
 
 @celery_app.task(
@@ -191,8 +222,24 @@ def process_subdomain_discovery(
     program_id: str,
     root_domain_asset_id: str,
     domain: str,
+    job_id: str | None = None,
+    attach_dns_chain: bool = True,
+    workflow_name: str | None = None,
+    workflow_instance_id: str | None = None,
+    workflow_step_index: int = 0,
+    scan_options: dict[str, Any] | None = None,
+    root_target_asset_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run Subfinder, upsert subdomains, link to root DOMAIN, then chain DNS resolution."""
+    """Run Subfinder, upsert subdomains, link to root DOMAIN; optionally chain or delegate to workflow router."""
+
+    job_uuid: uuid.UUID | None = None
+    if job_id:
+        try:
+            job_uuid = uuid.UUID(job_id)
+        except ValueError:
+            job_uuid = None
+    if job_uuid is not None:
+        sync_mark_job_status(job_uuid, JobStatus.RUNNING.value)
 
     async def work(
         session: AsyncSession,
@@ -266,20 +313,42 @@ def process_subdomain_discovery(
         }
 
     task_id = getattr(self.request, "id", None)
-    payload = self.run_with_session(
-        work,
-        program_id,
-        root_domain_asset_id,
-        domain,
-        task_id,
-    )
-
-    if payload.get("subdomain_asset_ids"):
-        chain(resolve_dns_batch.s(payload)).apply_async()
-    else:
-        logger.info(
-            "process_subdomain_discovery task_id={}: no subdomains to resolve; skip DNS chain",
+    try:
+        payload = self.run_with_session(
+            work,
+            program_id,
+            root_domain_asset_id,
+            domain,
             task_id,
         )
 
-    return payload
+        rta = root_target_asset_id or root_domain_asset_id
+        if attach_dns_chain:
+            if payload.get("subdomain_asset_ids"):
+                chain(resolve_dns_batch.s(payload)).apply_async()
+            else:
+                logger.info(
+                    "process_subdomain_discovery task_id={}: no subdomains to resolve; skip DNS chain",
+                    task_id,
+                )
+        elif workflow_name and workflow_instance_id:
+            from services.workflow_service import trigger_next_step
+
+            trigger_next_step(
+                payload,
+                workflow_name,
+                workflow_step_index,
+                job_id=job_id,
+                workflow_instance_id=workflow_instance_id,
+                scan_options=scan_options,
+                root_target_asset_id=rta,
+            )
+
+        if job_uuid is not None:
+            sync_mark_job_status(job_uuid, JobStatus.COMPLETED.value)
+        return payload
+    except Exception as exc:
+        if job_uuid is not None:
+            detail = str(exc)[:2000]
+            sync_mark_job_status(job_uuid, JobStatus.FAILED.value, error_detail=detail)
+        raise
