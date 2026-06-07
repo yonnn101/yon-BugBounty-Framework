@@ -7,6 +7,7 @@ from models.enums import (
     JobStatus,
     ProgramPlatform,
     RelationType,
+    ToolDatumKind,
 )
 from models.framework_settings import FrameworkSettings
 from models.program import Program
@@ -30,5 +31,6 @@ __all__ = [
     "Program",
     "ProgramPlatform",
     "RelationType",
+    "ToolDatumKind",
     "User",
 ]
