@@ -42,3 +42,26 @@ class GraphView(BaseModel):
     program_id: uuid.UUID
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+
+
+class GraphTreeNode(BaseModel):
+    """Recursive discovery tree (spec §3 path: Domain → Subdomain → IP → Port → Service)."""
+
+    id: uuid.UUID
+    type: str
+    value: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    first_seen: datetime
+    last_seen: datetime
+    children: list["GraphTreeNode"] = Field(default_factory=list)
+
+
+GraphTreeNode.model_rebuild()
+
+
+class HierarchicalGraphView(BaseModel):
+    """Program graph as nested trees plus assets not under any root DOMAIN."""
+
+    program_id: uuid.UUID
+    roots: list[GraphTreeNode]
+    orphans: list[GraphTreeNode]
