@@ -5,10 +5,12 @@ from __future__ import annotations
 import uuid
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from models.asset import Asset
 from models.program import Program
+from services import intelligence_service
 
 
 async def create_program(
@@ -23,6 +25,15 @@ async def create_program(
     settings: dict | None = None,
 ) -> Program:
     """Create a program owned by ``owner_id`` (request-scoped session commits via ``get_db``)."""
+    merged_settings = dict(settings or {})
+    intel_defaults = intelligence_service.default_program_intelligence_settings()
+    existing_intel = merged_settings.get("intelligence")
+    if isinstance(existing_intel, dict):
+        merged_intel = {**intel_defaults, **{k: bool(v) for k, v in existing_intel.items() if k in intel_defaults}}
+    else:
+        merged_intel = dict(intel_defaults)
+    merged_settings["intelligence"] = merged_intel
+
     program = Program(
         owner_id=owner_id,
         name=name,
@@ -30,7 +41,7 @@ async def create_program(
         reward_type=reward_type,
         in_scope=in_scope if in_scope is not None else [],
         out_scope=out_scope if out_scope is not None else [],
-        settings=settings or {},
+        settings=merged_settings,
     )
     session.add(program)
     await session.flush()
@@ -44,6 +55,30 @@ async def list_programs(session: AsyncSession, owner_id: uuid.UUID) -> Sequence[
         select(Program).where(Program.owner_id == owner_id).order_by(Program.name),
     )
     return result.scalars().all()
+
+
+async def list_programs_with_asset_stats(
+    session: AsyncSession,
+    owner_id: uuid.UUID,
+) -> list[tuple[Program, int, dict[str, int]]]:
+    """Each program with total asset count and per-``AssetType`` breakdown."""
+    programs = list(await list_programs(session, owner_id))
+    if not programs:
+        return []
+    pids = [p.id for p in programs]
+    stmt = (
+        select(Asset.program_id, Asset.type, func.count(Asset.id))
+        .where(Asset.program_id.in_(pids))
+        .group_by(Asset.program_id, Asset.type)
+    )
+    rows = await session.execute(stmt)
+    by_type: dict[uuid.UUID, dict[str, int]] = {pid: {} for pid in pids}
+    totals: dict[uuid.UUID, int] = {pid: 0 for pid in pids}
+    for pid, typ, cnt in rows:
+        c = int(cnt)
+        by_type[pid][str(typ)] = c
+        totals[pid] += c
+    return [(p, totals[p.id], by_type[p.id]) for p in programs]
 
 
 async def get_program(session: AsyncSession, program_id: uuid.UUID) -> Program | None:
@@ -91,7 +126,14 @@ async def update_program(
     if out_scope is not None:
         program.out_scope = out_scope
     if settings is not None:
-        program.settings = settings
+        merged = {**(program.settings or {}), **settings}
+        intel_defaults = intelligence_service.default_program_intelligence_settings()
+        prev_i = merged.get("intelligence") if isinstance(merged.get("intelligence"), dict) else {}
+        merged["intelligence"] = {
+            **intel_defaults,
+            **{k: bool(v) for k, v in prev_i.items() if k in intel_defaults},
+        }
+        program.settings = merged
     await session.flush()
     await session.refresh(program)
     return program
